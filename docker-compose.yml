@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  tidal-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tidal-api
+    restart: unless-stopped
+    ports:
+      - "${PORT:-38880}:${PORT:-38880}"
+    volumes:
+      - ./downloads:/app/downloads
+      - ./.tidal-dl.json:/root/.tidal-dl.json:ro
+    environment:
+      - PORT=${PORT:-38880}
+      - TZ=America/Sao_Paulo
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${PORT:-38880}/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    command: start-api
+    networks:
+      - tidal-network
+
+networks:
+  tidal-network:
+    driver: bridge 
