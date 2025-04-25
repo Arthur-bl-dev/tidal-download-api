@@ -9,6 +9,7 @@ import zipfile
 import threading
 import time
 import logging
+import re
 
 # Configuração de logs
 logging.basicConfig(level=logging.INFO)
@@ -42,12 +43,37 @@ def delete_file_after_delay(path: str, delay_seconds: int = 120):
     thread.daemon = True
     thread.start()
 
+def extract_tidal_id(url_or_id: str) -> str:
+    """Extrai o ID puro do Tidal de uma URL ou retorna o próprio ID se for apenas um número"""
+    # Se for apenas números, é provavelmente um ID direto
+    if url_or_id.isdigit():
+        return url_or_id
+    
+    # Tenta extrair ID de um link completo
+    # Exemplo: https://tidal.com/browse/track/118670403?u
+    match = re.search(r'track/(\d+)', url_or_id)
+    if match:
+        return match.group(1)
+    
+    # Tenta extrair ID de outros formatos de link
+    match = re.search(r'album/(\d+)', url_or_id)
+    if match:
+        return match.group(1)
+    
+    # Se não conseguiu extrair, retorna o valor original
+    return url_or_id
+
 @app.get("/")
 async def root():
     return {"message": "Tidal Download API funcionando"}
 
 @app.get("/download")
 async def download_music(background_tasks: BackgroundTasks, url_or_id: str = Query(...)):
+    # Extrai ID puro do Tidal
+    tidal_id = extract_tidal_id(url_or_id)
+    logger.info(f"URL/ID original: {url_or_id}")
+    logger.info(f"ID extraído: {tidal_id}")
+    
     # Cria diretório temporário único
     session_id = str(uuid.uuid4())[:8]
     session_dir = os.path.join(BASE_DIR, session_id)
@@ -55,17 +81,16 @@ async def download_music(background_tasks: BackgroundTasks, url_or_id: str = Que
     try:
         # Garante que o diretório existe com permissões corretas
         os.makedirs(session_dir, exist_ok=True)
-        os.chmod(session_dir, 0o755)  # Permissões de leitura/escrita/execução
+        os.chmod(session_dir, 0o777)  # Permissões totais para garantir
         
-        logger.info(f"Iniciando download de: {url_or_id}")
+        logger.info(f"Iniciando download de ID: {tidal_id}")
         logger.info(f"Diretório de destino: {session_dir}")
         
-        # Comando tidal-dl com opção verbose para mais informações
+        # Comando tidal-dl
         cmd = [
             "tidal-dl",
             "-o", session_dir,
-            "-l", url_or_id,
-            "--verbose"  # Adiciona logs detalhados
+            "-l", tidal_id
         ]
 
         # Executa o comando e captura a saída
@@ -95,9 +120,16 @@ async def download_music(background_tasks: BackgroundTasks, url_or_id: str = Que
         logger.info(f"Arquivos de áudio encontrados: {len(audio_files)}")
         
         if not audio_files:
-            # Tenta novamente com configuração alternativa se não encontrou arquivos
+            # Tenta manualmente verificar se há diretórios criados pelo tidal-dl
+            # Às vezes o tidal-dl cria diretórios mas não baixa arquivos por problemas de autenticação
             if process.returncode == 0:
                 logger.warning("tidal-dl reportou sucesso mas nenhum arquivo foi encontrado")
+                # Verifica se o erro é de autenticação
+                if "login needed" in process.stdout.lower() or "login needed" in process.stderr.lower():
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Autenticação necessária. Configure o tidal-dl primeiro."
+                    )
                 
             raise HTTPException(
                 status_code=404, 
