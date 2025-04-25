@@ -8,7 +8,8 @@ WORKDIR /app
 COPY . /app
 
 # Instala dependências
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir fastapi>=0.104.0 uvicorn>=0.23.2 python-multipart>=0.0.6 \
+    && pip install --no-cache-dir tidal-dl==2022.10.31.1
 
 # Expõe a porta usada pela aplicação FastAPI
 EXPOSE 38880
