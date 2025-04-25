@@ -10,8 +10,8 @@ COPY . /app
 # Instala dependências
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Expõe a porta usada pelo Flask
+# Expõe a porta usada pela aplicação FastAPI
 EXPOSE 38880
 
 # Comando para rodar o servidor
-CMD ["python", "main.py"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "38880"]
