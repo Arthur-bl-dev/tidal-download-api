@@ -1,8 +1,0 @@
-services:
-  app:
-    build: .
-    ports:
-      - "38880:38880"
-    volumes:
-      - .:/app
-    restart: unless-stopped 
