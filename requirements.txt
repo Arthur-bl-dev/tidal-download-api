@@ -1,0 +1,4 @@
+fastapi>=0.104.0
+uvicorn>=0.23.2
+tidal-dl>=2023.02.21
+python-multipart>=0.0.6
