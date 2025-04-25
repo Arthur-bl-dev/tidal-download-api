@@ -10,7 +10,7 @@ import threading
 import time
 
 app = FastAPI()
-BASE_DIR = "downloads"
+BASE_DIR = "/app/downloads"
 os.makedirs(BASE_DIR, exist_ok=True)
 
 def delete_folder(path: str):
