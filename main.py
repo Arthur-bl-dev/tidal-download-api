@@ -8,63 +8,122 @@ from pathlib import Path
 import zipfile
 import threading
 import time
+import logging
+
+# Configuração de logs
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
-BASE_DIR = "app/downloads"
+BASE_DIR = "downloads"  # Simplificando o caminho para evitar problemas
 os.makedirs(BASE_DIR, exist_ok=True)
 
 def delete_folder(path: str):
     if os.path.exists(path):
-        shutil.rmtree(path)
+        try:
+            shutil.rmtree(path)
+            logger.info(f"Diretório removido: {path}")
+        except Exception as e:
+            logger.error(f"Erro ao remover diretório {path}: {e}")
 
 def delete_file_after_delay(path: str, delay_seconds: int = 120):
     """Deleta um arquivo após um determinado tempo (padrão: 2 minutos)"""
     def delayed_delete():
         time.sleep(delay_seconds)
         if os.path.exists(path):
-            os.remove(path)
+            try:
+                os.remove(path)
+                logger.info(f"Arquivo removido após delay: {path}")
+            except Exception as e:
+                logger.error(f"Erro ao remover arquivo {path}: {e}")
     
     # Inicia thread para deletar o arquivo após o delay
     thread = threading.Thread(target=delayed_delete)
     thread.daemon = True
     thread.start()
 
+@app.get("/")
+async def root():
+    return {"message": "Tidal Download API funcionando"}
+
 @app.get("/download")
 async def download_music(background_tasks: BackgroundTasks, url_or_id: str = Query(...)):
     # Cria diretório temporário único
     session_id = str(uuid.uuid4())[:8]
     session_dir = os.path.join(BASE_DIR, session_id)
-    os.makedirs(session_dir, exist_ok=True)
-
-    cmd = [
-        "tidal-dl",
-        "-o", session_dir,
-        "-l", url_or_id
-    ]
-
+    
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        # Garante que o diretório existe com permissões corretas
+        os.makedirs(session_dir, exist_ok=True)
+        os.chmod(session_dir, 0o755)  # Permissões de leitura/escrita/execução
+        
+        logger.info(f"Iniciando download de: {url_or_id}")
+        logger.info(f"Diretório de destino: {session_dir}")
+        
+        # Comando tidal-dl com opção verbose para mais informações
+        cmd = [
+            "tidal-dl",
+            "-o", session_dir,
+            "-l", url_or_id,
+            "--verbose"  # Adiciona logs detalhados
+        ]
 
-        # Busca arquivos válidos de áudio no diretório
-        audio_files = list(Path(session_dir).rglob("*.flac")) + \
-              list(Path(session_dir).rglob("*.mp3")) + \
-              list(Path(session_dir).rglob("*.m4a"))
+        # Executa o comando e captura a saída
+        process = subprocess.run(cmd, capture_output=True, text=True)
+        
+        # Loga a saída do processo para diagnóstico
+        logger.info(f"Comando tidal-dl status: {process.returncode}")
+        if process.stdout:
+            logger.info(f"tidal-dl stdout: {process.stdout}")
+        if process.stderr:
+            logger.error(f"tidal-dl stderr: {process.stderr}")
+            
+        # Lista o conteúdo do diretório para diagnóstico
+        logger.info(f"Conteúdo do diretório após download:")
+        for root, dirs, files in os.walk(session_dir):
+            logger.info(f"Dir: {root}")
+            for d in dirs:
+                logger.info(f"  Subdir: {d}")
+            for f in files:
+                logger.info(f"  Arquivo: {f}")
+
+        # Busca arquivos válidos de áudio no diretório de forma mais abrangente
+        audio_files = []
+        for extension in ["*.flac", "*.mp3", "*.m4a", "*.wav", "*.aac"]:
+            audio_files.extend(list(Path(session_dir).rglob(extension)))
+            
+        logger.info(f"Arquivos de áudio encontrados: {len(audio_files)}")
+        
         if not audio_files:
-            raise HTTPException(status_code=404, detail="Arquivo não encontrado após o download.")
+            # Tenta novamente com configuração alternativa se não encontrou arquivos
+            if process.returncode == 0:
+                logger.warning("tidal-dl reportou sucesso mas nenhum arquivo foi encontrado")
+                
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Arquivo não encontrado após o download. Status: {process.returncode}"
+            )
         
         # Pega a pasta da música (o diretório pai do primeiro arquivo de áudio)
         music_folder = audio_files[0].parent
+        logger.info(f"Pasta de música identificada: {music_folder}")
         
         # Cria um arquivo ZIP com todo o conteúdo da pasta da música
         zip_filename = f"tutu_download_{session_id}.zip"
         zip_path = os.path.join(BASE_DIR, zip_filename)
         
         with zipfile.ZipFile(zip_path, 'w') as zipf:
+            file_count = 0
             for root, dirs, files in os.walk(music_folder):
                 for file in files:
                     file_path = os.path.join(root, file)
                     arcname = os.path.relpath(file_path, music_folder)
                     zipf.write(file_path, arcname)
+                    file_count += 1
+            
+            logger.info(f"Arquivos adicionados ao ZIP: {file_count}")
+        
+        logger.info(f"Arquivo ZIP criado: {zip_path}")
         
         # Programa a exclusão da pasta após o download
         background_tasks.add_task(delete_folder, session_dir)
@@ -79,8 +138,18 @@ async def download_music(background_tasks: BackgroundTasks, url_or_id: str = Que
         )
 
     except subprocess.CalledProcessError as e:
+        logger.error(f"Erro no processo tidal-dl: {e}")
+        logger.error(f"stderr: {e.stderr}")
+        logger.error(f"stdout: {e.stdout}")
         delete_folder(session_dir)
         raise HTTPException(
             status_code=500,
             detail=f"Erro ao baixar: {e.stderr or e.stdout}"
+        )
+    except Exception as e:
+        logger.error(f"Erro inesperado: {str(e)}", exc_info=True)
+        delete_folder(session_dir)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erro inesperado: {str(e)}"
         )
